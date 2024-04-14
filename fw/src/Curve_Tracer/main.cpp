@@ -19,11 +19,11 @@
 #include <cstdlib>
 #include <cstring>
 
-// #define _DEBUG_TUNING_ 1
+#define _DEBUG_TUNING_ 1
 #define MAJOR_VERSION 0
 #define MINOR_VERSION 2
 #define PATCH_VERSION 0
-#define BAUD_RATE 57600
+#define BAUD_RATE 115200 // 57600
 
 /** Peripherals. */
 static DigitalOut led_heartbeat(D1);
@@ -150,18 +150,22 @@ int main() {
     printf("DEBUG MODE\r\n");
     enum Mode mode = CELL;
 
+    int end_count = 0;
+
     while (1) {
         // Test duration one way: 6.275 seconds
         // 251 steps
         // 25 ms per step
         // 25 substeps per step
         // 1 ms per substep
-        #define GATE_OFF                0.25
-        #define GATE_ON                 0.75
+        #define GATE_OFF                0.001
+        #define GATE_ON                 0.999
         #define GATE_STEP               0.001
         #define SETTLING_TIME_US        1000 // us
         #define ITERATIONS              25
 
+        if (end_count >= 3) break;
+        printf("*************************************** END_COUNT: %d ***************************************\n", end_count);
         /* Forwards. */
         for (dac_control = GATE_OFF; dac_control <= GATE_ON; dac_control = dac_control + GATE_STEP) {
             float meas_volt = 0.00;
@@ -186,7 +190,8 @@ int main() {
                 meas_volt * meas_curr
             );
         }
-
+        
+        printf("*************************************** Backwards ***************************************\n");
         /* Backwards. */
         for (dac_control = GATE_ON; dac_control >= GATE_OFF; dac_control = dac_control - GATE_STEP) {
             float meas_volt = 0.00;
@@ -212,12 +217,16 @@ int main() {
             );
         }
 
+        end_count++;
+
         #undef GATE_OFF
         #undef GATE_ON
         #undef GATE_STEP
         #undef SETTLING_TIME_US
         #undef ITERATIONS
     }
+    printf("TERMINATE SCAN MODE\n");
+    
 #else
     /* Measurement mode. */
     printf("MEASUREMENT MODE\n");
