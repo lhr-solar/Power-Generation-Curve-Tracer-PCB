@@ -20,7 +20,7 @@
 #include <cstring>
 #include <ArduinoJson.h>
 
-#define _DEBUG_TUNING_ 1
+// #define _DEBUG_TUNING_ 1
 #define MAJOR_VERSION 0
 #define MINOR_VERSION 2
 #define PATCH_VERSION 0
@@ -120,7 +120,7 @@ bool settleTimeValid(std::uint32_t settlingTime)
     return settlingTime >= 1000 && settlingTime <= 100000;
 }
 
-void readBuffer(char *buffer, std::size_t BUFFER_SIZE, uint32_t timeout_ms)
+bool readBuffer(char *buffer, std::size_t BUFFER_SIZE, uint32_t timeout_ms)
 {
     uint8_t idx = 0;
     uint32_t elapsed_time = 0;
@@ -143,13 +143,7 @@ void readBuffer(char *buffer, std::size_t BUFFER_SIZE, uint32_t timeout_ms)
             if (buffer[idx - 1] == '\n')
             {
                 buffer[idx] = '\0'; // Null terminate the string
-                // Validate JSON
-                if (!validateJSON(buffer))
-                {
-                    printf("ERROR: Invalid JSON received\r\n");
-                    return false;
-                }
-                return true; // Successfully received data
+                return true;        // Successfully received data
             }
         }
         wait_us(poll_interval * 1000);
@@ -181,6 +175,24 @@ void parseJSONConfig(char *buffer)
     int num_iters = doc["ni"];
     int settling_time = doc["st_ms"];
     int enc_scheme = doc["enc"];
+
+    //Extract PV mode (0 = CELL, 1 = MODULE, 2 = ARRAY)
+    int received_mode = doc["type"];
+    if (!modeValid(received_mode))
+    {
+        printf("ERROR: Invalid mode received\r\n");
+        return;
+    }
+    mode = static_cast<Mode>(received_mode); // Update the global variable
+
+    // Extract other parameters
+    GATE_OFF = doc["sr"][0];
+    GATE_ON = doc["sr"][1];
+    GATE_STEP = doc["sr"][2];
+    ITERATIONS = doc["num_iters"];
+    SETTLING_TIME_US = doc["settling_time"] * 1000;
+
+    printf("Valid configuration received. Mode set to %d\r\n", mode);
 
     // Validate parameters
     if (!modeValid(static_cast<Mode>(type)))
@@ -238,15 +250,14 @@ void okHandshake(char *buffer, std::size_t BUFFER_SIZE)
         else
         {
             ok = false;
-            print("ERROR: Invalid handshake response\r\n");
+            printf("ERROR: Invalid handshake response\r\n");
             retries--;
         }
 
         if (!ok)
         {
             printf("ERROR: Handshake failed after retries\r\n");
-            while (1)
-                ; // Halt the program
+            return;
         }
     }
 }
@@ -270,7 +281,7 @@ int main()
     readBuffer(mode_buffer, sizeof(mode_buffer), 5000); // 5-sec timeout for mode selection
 
     int mode_selection = atoi(mode_buffer);
-    if (mode_selection != 1 || mode_selection != 2)
+    if (mode_selection != 1 && mode_selection != 2)
     {
         printf("ERROR: Invalid mode selected. Defaulting to Measurement Mode.\n");
         mode_selection = 2; // Default Measurement Mode
@@ -305,7 +316,7 @@ int main()
                 /* SW based sample averaging control. */
                 for (uint8_t i = 0; i < ITERATIONS; ++i)
                 {
-                    wait_us(SETTLING_TIME_US);
+                    wait_us(SETTLING_TIME_US + 100);
                     meas_volt += sen_voltage.read();
                     meas_curr += sen_current.read();
                 }
@@ -332,7 +343,7 @@ int main()
                 /* SW based sample averaging control. */
                 for (uint8_t i = 0; i < ITERATIONS; ++i)
                 {
-                    wait_us(SETTLING_TIME_US);
+                    wait_us(SETTLING_TIME_US + 100);
                     meas_volt += sen_voltage.read();
                     meas_curr += sen_current.read();
                 }
@@ -352,106 +363,107 @@ int main()
         }
         printf("TERMINATE SCAN MODE\n");
     }
-        else if (mode_selection == 2)
+    else if (mode_selection == 2)
+    {
+        /* Measurement mode: Automated IV and PV curve scanning */
+        printf("MEASUREMENT MODE\n");
+
+/* Setup buffer and serial port. */
+#define BUFFER_SIZE 256
+        char buffer[BUFFER_SIZE] = {0};
+        bool valid_conf = false;
+
+        while (1)
         {
-            /* Measurement mode: Automated IV and PV curve scanning */
-            printf("MEASUREMENT MODE\n");
+            enum Mode mode = CELL;
+            bool ready = false;
 
-            /* Setup buffer and serial port. */
-            #define BUFFER_SIZE 256
-            char buffer[BUFFER_SIZE] = {0};
-            bool valid_conf = false;
+            printf("READY_FOR_TRANSMISSION\r\n");
 
-            while (1)
+            // Perform handshake with the controller
+            okHandshake(buffer, BUFFER_SIZE);
+            printf("BEGIN_TRANSMISSION\r\n");
+
+            // Read and Parse the JSON config
+            memset(buffer, '\0', BUFFER_SIZE);
+            if (!readBuffer(buffer, BUFFER_SIZE, 5000))
+            { // Timeout of 5000ms
+                printf("ERROR: Failed to receive valid data\r\n");
+                continue;
+            }
+
+            printf("Received Config: %s\r\n", buffer);
+            parseJSONConfig(buffer);
+
+            // Validate the parsed configs
+            valid_conf = modeValid(mode) && gatesValid(GATE_OFF, GATE_ON, GATE_STEP) && iterationsValid(ITERATIONS) && settleTimeValid(SETTLING_TIME_US);
+
+            if (valid_conf)
             {
-                enum Mode mode = CELL;
-                bool ready = false;
+                printf("valid config\r\n");
+                ready = true;
+            }
+            else
+            {
+                printf("invalid config\r\n");
+                continue; // Skip if configuration is invalid
+            }
+            if (valid_conf && ready)
+            {
+                printf("BEGIN SCAN\r\n");
 
-                printf("READY_FOR_TRANSMISSION\r\n");
-
-                // Perform handshake with the controller
-                okHandshake(buffer, BUFFER_SIZE);
-                printf("BEGIN_TRANSMISSION\r\n");
-
-                // Read and Parse the JSON config
-                memset(buffer, '\0', BUFFER_SIZE);
-                if (!readBuffer, BUFFER_SIZE, 5000)
-                { // Timeout of 5000ms
-                    printf("ERROR: Failed to receive valid data\r\n");
-                    continue;
-                }
-
-                printf("Received Config: %s\r\n", buffer);
-                parseJSONConfig(buffer);
-
-                // Validate the parsed configs
-                valid_config = modeValid(mode) && gatesValid(GATE_OFF, GATE_ON, GATE_STEP) && iterationsValid(ITERATIONS) && settleTimeValid(SETTLING_TIME_US);
-
-                if (valid_conf)
+                // Forward Sweep
+                for (float currentGate = GATE_OFF; currentGate <= GATE_ON; currentGate += GATE_STEP)
                 {
-                    printf("valid config\r\n");
-                }
-                else
-                {
-                    printf("invalid config\r\n");
-                    continue; // Skip if configuration is invalid
-                }
-                if (valid_conf && ready)
-                {
-                    printf("BEGIN SCAN\r\n");
+                    dac_control = currentGate;
+                    float meas_volt = 0.00;
+                    float meas_curr = 0.00;
 
-                    // Forward Sweep
-                    for (float currentGate = GATE_OFF; currentGate <= GATE_ON; currentGate += GATE_STEP)
+                    for (uint8_t i = 0; i < ITERATIONS; ++i)
                     {
-                        dac_control = currentGate;
-                        float meas_volt = 0.00;
-                        float meas_curr = 0.00;
-
-                        for (uint8_t i = 0; i < ITERATIONS; ++i)
-                        {
-                            wait_us(SETTLING_TIME_US);
-                            meas_volt += sen_voltage.read();
-                            meas_curr += sen_current.read();
-                        }
-
-                        meas_volt = cal_sen_volt(meas_volt, ITERATIONS, mode);
-                        meas_curr = cal_sen_curr(meas_curr, ITERATIONS);
-
-                        printf(
-                            "Gate (V): %f, VSense (V): %f, ISense (A): %f, V*I (W): %f\n",
-                            cal_dac_control(currentGate),
-                            meas_volt,
-                            meas_curr,
-                            meas_volt * meas_curr);
+                        wait_us(SETTLING_TIME_US + 100);
+                        meas_volt += sen_voltage.read();
+                        meas_curr += sen_current.read();
                     }
 
-                    // Backward Sweep
-                    for (float currentGate = GATE_ON; currentGate >= GATE_OFF; currentGate -= GATE_STEP)
+                    meas_volt = cal_sen_volt(meas_volt, ITERATIONS, mode);
+                    meas_curr = cal_sen_curr(meas_curr, ITERATIONS);
+
+                    printf(
+                        "Gate (V): %f, VSense (V): %f, ISense (A): %f, V*I (W): %f\n",
+                        cal_dac_control(currentGate),
+                        meas_volt,
+                        meas_curr,
+                        meas_volt * meas_curr);
+                }
+
+                // Backward Sweep
+                for (float currentGate = GATE_ON; currentGate >= GATE_OFF; currentGate -= GATE_STEP)
+                {
+                    dac_control = currentGate;
+                    float meas_volt = 0.00;
+                    float meas_curr = 0.00;
+
+                    for (uint8_t i = 0; i < ITERATIONS; ++i)
                     {
-                        dac_control = currentGate;
-                        float meas_volt = 0.00;
-                        float meas_curr = 0.00;
-
-                        for (uint8_t i = 0; i < ITERATIONS; ++i)
-                        {
-                            wait_us(SETTLING_TIME_US);
-                            meas_volt += sen_voltage.read();
-                            meas_curr += sen_current.read();
-                        }
-
-                        meas_volt = cal_sen_volt(meas_volt, ITERATIONS, mode);
-                        meas_curr = cal_sen_curr(meas_curr, ITERATIONS);
-
-                        printf(
-                            "Gate (V): %f, VSense (V): %f, ISense (A): %f, V*I (W): %f\n",
-                            cal_dac_control(currentGate),
-                            meas_volt,
-                            meas_curr,
-                            meas_volt * meas_curr);
+                        wait_us(SETTLING_TIME_US + 100);
+                        meas_volt += sen_voltage.read();
+                        meas_curr += sen_current.read();
                     }
 
-                    printf("END SCAN\r\n");
+                    meas_volt = cal_sen_volt(meas_volt, ITERATIONS, mode);
+                    meas_curr = cal_sen_curr(meas_curr, ITERATIONS);
+
+                    printf(
+                        "Gate (V): %f, VSense (V): %f, ISense (A): %f, V*I (W): %f\n",
+                        cal_dac_control(currentGate),
+                        meas_volt,
+                        meas_curr,
+                        meas_volt * meas_curr);
                 }
+
+                printf("END SCAN\r\n");
             }
         }
     }
+}
