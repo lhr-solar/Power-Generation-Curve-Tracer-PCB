@@ -7,8 +7,7 @@
  * @copyright   Copyright (c) 2022
  * @note        Use _DEBUG_TUNING flag to perform manual tuning.
  *              Default baud rate is 115200 baud.
- * @todo        - Communication with IV Curve Tracer
- *              - TSL2591 light sensor support through CAN
+ * @todo        - TSL2591 light sensor support through CAN
  *              - RTD temperature sensor support through CAN
  */
 
@@ -40,7 +39,8 @@ float GATE_OFF = 0.00;
 float GATE_ON = 1.00;
 float GATE_STEP = 0.001;
 uint8_t ITERATIONS = 25;
-uint32_t SETTLING_TIME_US = 0;
+uint32_t SETTLING_TIME_US = 1000;
+enum Mode { CELL, MODULE, ARRAY } mode;
 
 /** Tickers. */
 static LowPowerTicker tick_heartbeat;
@@ -50,13 +50,6 @@ FileHandle *mbed::mbed_override_console(int fd)
 {
     return &serial_port;
 }
-
-enum Mode
-{
-    CELL,
-    MODULE,
-    ARRAY
-};
 
 enum EncodingScheme
 {
@@ -166,7 +159,7 @@ void parseJSONConfig(char *buffer)
         printf("ERROR: Invalid JSON Config\r\n");
         return;
     }
-
+    mode = static_cast<Mode>(received_mode);
     // Extract configuration parameters
     int type = doc["type"];
     float sr_low = doc["sr"][0];
@@ -183,7 +176,6 @@ void parseJSONConfig(char *buffer)
         printf("ERROR: Invalid mode received\r\n");
         return;
     }
-    mode = static_cast<Mode>(received_mode); // Update the global variable
 
     // Extract other parameters
     GATE_OFF = doc["sr"][0];
@@ -262,6 +254,18 @@ void okHandshake(char *buffer, std::size_t BUFFER_SIZE)
     }
 }
 
+void sendMeasurementResults(float gate, float voltage, float current) {
+    StaticJsonDocument<128> json;
+    json["gate"] = gate;
+    json["voltage"] = voltage;
+    json["current"] = current;
+    json["power"] = voltage * current;
+
+    char json_output[128];
+    serializeJson(json, json_output);
+    printf("%s\r\n", json_output);
+}
+
 int main()
 {
     // Set up serial port with appropriate format
@@ -274,7 +278,7 @@ int main()
     printf("Select mode:\n");
     printf("1: Debug Mode\n");
     printf("2: Measurement Mode\n");
-    printf("Enter choice: ");
+    printf("Enter choice number: ");
 
     char mode_buffer[10];
     memset(mode_buffer, '\0', sizeof(mode_buffer));
@@ -373,6 +377,16 @@ int main()
         char buffer[BUFFER_SIZE] = {0};
         bool valid_conf = false;
 
+        printf("Waiting for connection...\r\n");
+        while (true) {
+            if (readBuffer(buffer, BUFFER_SIZE, 5000)) {
+                if (strcmp(buffer, "OK") == 0) {
+                    printf("Connection established with Eclipse Software.\r\n");
+                    break;
+                }
+            }
+        }
+
         while (1)
         {
             enum Mode mode = CELL;
@@ -408,7 +422,7 @@ int main()
                 printf("invalid config\r\n");
                 continue; // Skip if configuration is invalid
             }
-            if (valid_conf && ready)
+            if (.)
             {
                 printf("BEGIN SCAN\r\n");
 
