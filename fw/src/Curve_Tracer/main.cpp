@@ -159,7 +159,7 @@ void parseJSONConfig(char *buffer)
         printf("ERROR: Invalid JSON Config\r\n");
         return;
     }
-    mode = static_cast<Mode>(received_mode);
+    mode = static_cast<Mode>(doc["type"]);
     // Extract configuration parameters
     int type = doc["type"];
     float sr_low = doc["sr"][0];
