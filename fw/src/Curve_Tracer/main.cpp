@@ -17,7 +17,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ArduinoJson.h>
 
 // #define _DEBUG_TUNING_ 1
 #define MAJOR_VERSION 2
@@ -31,8 +30,8 @@ static DigitalOut led_scan(D0);
 static AnalogIn sen_voltage(A6);
 static AnalogIn sen_current(A0);
 static AnalogOut dac_control(A3);
-//static CAN can(D10, D2);
-//static CANMessage msg;
+// static CAN can(D10, D2);
+// static CANMessage msg;
 static BufferedSerial serial_port(USBTX, USBRX, BAUD_RATE);
 
 /** Global Variables **/
@@ -41,29 +40,46 @@ float GATE_ON = 1.00;
 float GATE_STEP = 0.001;
 uint8_t ITERATIONS = 25;
 uint32_t SETTLING_TIME_US = 1000;
-enum Mode { CELL, MODULE, ARRAY } mode;
-enum Operations { DEBUG, MEASUREMENT } operation;
+
+enum Mode
+{
+    CELL,
+    MODULE,
+    ARRAY
+} mode;
+
+enum Operations
+{
+    DEBUG,
+    MEASUREMENT
+} operation;
 bool system_reset = false
 
 /** Tickers. */
 static LowPowerTicker tick_heartbeat;
 void heartbeat(void) { led_heartbeat = !led_heartbeat; }
 
-FileHandle *mbed::mbed_override_console(int fd){ return &serial_port; }
+FileHandle *mbed::mbed_override_console(int fd) { return &serial_port; }
 
-void okHandshake(char *buffer, std::size_t BUFFER_SIZE) {
+void okHandshake(char *buffer, std::size_t BUFFER_SIZE)
+{
     printf("READY_FOR_HANDSHAKE\r\n");
-    while (true) {
+    while (true)
+    {
         memset(buffer, '\0', BUFFER_SIZE);
-        if (!readBuffer(buffer, BUFFER_SIZE, 2000)) { 
-            printf("ERROR: Handshake timeout\r\n"); 
-            continue; 
+        if (!readBuffer(buffer, BUFFER_SIZE, 2000))
+        {
+            printf("ERROR: Handshake timeout\r\n");
+            continue;
         }
-        if (strncmp(buffer, "OK\r\n", 4) == 0) { 
-            printf("OK_RECEIVED\r\n"); 
-            break; 
-        } else { 
-            printf("ERROR: Invalid handshake response\r\n"); 
+        if (strncmp(buffer, "OK\r\n", 4) == 0)
+        {
+            printf("OK_RECEIVED\r\n");
+            break;
+        }
+        else
+        {
+            printf("ERROR: Invalid handshake response\r\n");
         }
     }
 }
@@ -153,55 +169,8 @@ bool readBuffer(char *buffer, std::size_t BUFFER_SIZE, uint32_t timeout_ms)
     return false; // Timeout occurred
 }
 
-void parseJSONConfig(char *buffer)
+void systemReset()
 {
-    StaticJsonDocument<256> doc;
-
-    // Deserialize the JSON string into a document
-    DeserializationError error = deserializeJson(doc, buffer);
-    if (error){ printf("ERROR: Invalid JSON Config\r\n"); return; }
-    
-    const char* mode_str = doc["mode"];
-    if (strcmp(mode_str, "DEBUG") == 0) {
-        operation = DEBUG;
-    } 
-    else if (strcmp(mode_str, "MEASUREMENT") == 0) {
-        operation = MEASUREMENT;
-    }
-    else {
-        printf("ERROR: Invalid mode selection \r\n");
-        return
-    }
-
-    if (!gatesValid(sr_low, sr_high, step))
-    {
-        printf("ERROR: Invalid gate range\r\n");
-        return;
-    }
-
-    if (!iterationsValid(num_iters))
-    {
-        printf("ERROR: Invalid iterations\r\n");
-        return;
-    }
-
-    if (!settleTimeValid(settling_time))
-    {
-        printf("ERROR: Invalid settling time\r\n");
-        return;
-    }
-
-    mode = static_cast<Mode>(doc["type"]);
-    GATE_OFF = doc["sr"][0];
-    GATE_ON = doc["sr"][1];
-    GATE_STEP = doc["sr"][2];
-    ITERATIONS = doc["num_iters"];
-    SETTLING_TIME_US = doc["settling_time"] * 1000;
-
-    printf("valid config\r\n");
-}
-
-void systemReset() {
     printf("SYSTEM RESET INITIATED...\r\n");
 
     // Reset global variables to default values
@@ -218,18 +187,17 @@ void systemReset() {
     okHandshake(buffer, sizeof(buffer));
 
     printf("BEGIN_TRANSMISSION\r\n");
-    if (!readBuffer(buffer, sizeof(buffer), 5000)) { 
-        printf("ERROR: Failed to receive config\r\n"); 
-        return; 
-    }
-    parseJSONConfig(buffer);
 }
 
-void monitorReset() {
+void monitorReset()
+{
     char buffer[10];
-    while (true) {
-        if (readBuffer(buffer, sizeof(buffer), 1000)) {
-            if (strncmp(buffer, "RESET", 5) == 0) {
+    while (true)
+    {
+        if (readBuffer(buffer, sizeof(buffer), 1000))
+        {
+            if (strncmp(buffer, "RESET", 5) == 0)
+            {
                 system_reset_requested = true;
                 break;
             }
@@ -237,24 +205,13 @@ void monitorReset() {
     }
 }
 
-void sendMeasurementResults(float gate, float voltage, float current) {
-    StaticJsonDocument<128> json;
-    json["gate"] = gate;
-    json["voltage"] = voltage;
-    json["current"] = current;
-    json["power"] = voltage * current;
-
-    // Compute simple checksum (XOR of float values converted to int)
-    uint32_t checksum = (uint32_t)(gate * 1000) ^ (uint32_t)(voltage * 1000) ^ 
-                        (uint32_t)(current * 1000) ^ (uint32_t)(json["power"].as<float>() * 1000);
-    json["checksum"] = checksum;
-
-    char json_output[128];
-    serializeJson(json, json_output);
-    printf("%s\r\n", json_output);
+void sendMeasurementResults(float gate, float voltage, float current)
+{
+    printf("%.3f, %.3f, %.3f, %.3f\r\n", gate, voltage, current, voltage * current);
 }
 
-int main() {
+int main()
+{
     serial_port.set_format(8, BufferedSerial::Even, 1);
     tick_heartbeat.attach(&heartbeat, 500ms);
     dac_control = 0.0;
@@ -265,30 +222,32 @@ int main() {
     okHandshake(buffer, sizeof(buffer));
 
     printf("BEGIN_TRANSMISSION\r\n");
-    if (!readBuffer(buffer, sizeof(buffer), 5000)) { 
-        printf("ERROR: Failed to receive config\r\n"); 
-        return 1; 
-    }
-    parseJSONConfig(buffer);
 
     // Start monitoring for RESET command in a separate thread
     Thread resetThread;
     resetThread.start(monitorReset);
 
-    while (true) {
-        if (system_reset_requested) {
+    while (true)
+    {
+        if (system_reset_requested)
+        {
             systemReset();
         }
 
-        if (operation == MEASUREMENT) {
+        if (operation == MEASUREMENT)
+        {
             printf("MEASUREMENT MODE STARTING...\r\n");
 
             printf("BEGIN SCAN\r\n");
-            for (float currentGate = GATE_OFF; currentGate <= GATE_ON; currentGate += GATE_STEP) {
+
+            // forward
+            for (float currentGate = GATE_OFF; currentGate <= GATE_ON; currentGate += GATE_STEP)
+            {
                 dac_control = currentGate;
                 float meas_volt = 0.00, meas_curr = 0.00;
 
-                for (uint8_t i = 0; i < ITERATIONS; ++i) {
+                for (uint8_t i = 0; i < ITERATIONS; ++i)
+                {
                     wait_us(SETTLING_TIME_US + 100);
                     meas_volt += sen_voltage.read();
                     meas_curr += sen_current.read();
@@ -299,11 +258,14 @@ int main() {
                 sendMeasurementResults(cal_dac_control(currentGate), meas_volt, meas_curr);
             }
 
-            for (float currentGate = GATE_ON; currentGate >= GATE_OFF; currentGate -= GATE_STEP) {
+            // backward
+            for (float currentGate = GATE_ON; currentGate >= GATE_OFF; currentGate -= GATE_STEP)
+            {
                 dac_control = currentGate;
                 float meas_volt = 0.00, meas_curr = 0.00;
 
-                for (uint8_t i = 0; i < ITERATIONS; ++i) {
+                for (uint8_t i = 0; i < ITERATIONS; ++i)
+                {
                     wait_us(SETTLING_TIME_US + 100);
                     meas_volt += sen_voltage.read();
                     meas_curr += sen_current.read();
@@ -315,20 +277,20 @@ int main() {
             }
 
             printf("END SCAN\r\n");
-
-        } else if (operation == DEBUG) {
-            printf("DEBUG MODE ACTIVATED\r\n");
-            printf("Commands: 'INC' (increase voltage), 'DEC' (decrease voltage), 'EXIT' (exit debug mode)\r\n");
+        }
+        else if (operation == DEBUG)
+        {
+            printf("DEBUG MODE ACTIVATED - Waiting for Voltage Input...\r\n");
 
             float currentGate = GATE_OFF;
             dac_control = currentGate;
             char debugBuffer[20];
 
-            while (true) {
-                printf("Current Gate Voltage: %.3fV | Reading Sensors...\r\n", currentGate);
-                
+            while (true)
+            {
                 float meas_volt = 0.00, meas_curr = 0.00;
-                for (uint8_t i = 0; i < ITERATIONS; ++i) {
+                for (uint8_t i = 0; i < ITERATIONS; ++i)
+                {
                     wait_us(SETTLING_TIME_US + 100);
                     meas_volt += sen_voltage.read();
                     meas_curr += sen_current.read();
@@ -338,28 +300,32 @@ int main() {
                 meas_curr = cal_sen_curr(meas_curr, ITERATIONS);
                 sendMeasurementResults(cal_dac_control(currentGate), meas_volt, meas_curr);
 
-                if (!readBuffer(debugBuffer, sizeof(debugBuffer), 5000)) continue;
-
-                if (strncmp(debugBuffer, "INC", 3) == 0 && currentGate + GATE_STEP <= GATE_ON) {
-                    currentGate += GATE_STEP;
-                    dac_control = currentGate;
-                    printf("Voltage Increased to %.3fV\r\n", currentGate);
-                } else if (strncmp(debugBuffer, "DEC", 3) == 0 && currentGate - GATE_STEP >= GATE_OFF) {
-                    currentGate -= GATE_STEP;
-                    dac_control = currentGate;
-                    printf("Voltage Decreased to %.3fV\r\n", currentGate);
-                } else if (strncmp(debugBuffer, "EXIT", 4) == 0) {
-                    printf("Exiting Debug Mode...\r\n");
-                    break;
-                } else {
-                    printf("Invalid Command. Use 'INC', 'DEC', or 'EXIT'\r\n");
+                if (readBuffer(debugBuffer, sizeof(debugBuffer), 500))
+                {
+                    if (strncmp(debugBuffer, "SET", 3) == 0)
+                    {
+                        float new_voltage = atof(debugBuffer + 4);
+                        if (new_voltage >= GATE_OFF && new_voltage <= GATE_ON)
+                        {
+                            currentGate = new_voltage;
+                            dac_control = currentGate;
+                            printf("Voltage Updated: %3.fV\r\n", currentGate);
+                        }
+                        else
+                        {
+                            printf("ERROR: Voltage %3.fV out of range (%.3fV - %.3fV)\r\n", new_voltage, GATE_OFF, GATE_ON);
+                        }
+                    }
+                    else if (strncmp(debugBuffer, "EXIT", 4) == 0)
+                    {
+                        printf("Exiting Debug Mode...\r\n");
+                        break;
+                    }
                 }
             }
         }
-
         // Keep checking for RESET command
         wait_us(1000000);
     }
-
     return 0;
 }
